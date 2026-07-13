@@ -719,6 +719,39 @@
     return stat.wrong / stat.attempts;
   }
 
+  /* -------------------- 重み付き非復元抽出（未出題・苦手優先） -------------------- */
+  function wordWeight(w, stats) {
+    var s = stats[w.en];
+    var weight = 1.0; // ベース（全語がいつか選ばれ得る）
+    var staleDays;
+    if (!s || !s.attempts) {
+      // 未出題
+      weight += 5.0;
+      staleDays = 5;
+    } else {
+      var rate = s.wrong / s.attempts;
+      if (s.wrong > 0) weight += 1 + 4 * rate; // 誤答を誤答率に比例して加点
+      var elapsedMs = Date.now() - (s.lastSeen || 0);
+      staleDays = Math.min(elapsedMs / 86400000, 5);
+    }
+    weight += staleDays * 0.3; // 鮮度ボーナス（最大 +1.5）
+    return weight;
+  }
+
+  // Efraimidis–Spirakis 方式による重み付き非復元サンプリング
+  function weightedSample(pool, stats, count) {
+    if (count === "all" || count >= pool.length) {
+      return shuffle(pool);
+    }
+    var keyed = pool.map(function (w) {
+      var weight = wordWeight(w, stats);
+      var key = Math.pow(Math.random(), 1 / weight);
+      return { w: w, key: key };
+    });
+    keyed.sort(function (a, b) { return b.key - a.key; });
+    return keyed.slice(0, count).map(function (item) { return item.w; });
+  }
+
   var toastTimer = null;
   function showToast(msg) {
     var el = document.getElementById("toast");
@@ -826,9 +859,9 @@
     html += '<header class="app-header"><div class="logo">英検準2級 単語クイズ<span class="sub">EIKEN Pre-2 Vocabulary Quiz</span></div></header>';
     html += '<div class="card">';
     html += '  <h2 class="section-title">📚 モードを選ぶ</h2>';
-    html += '  <p class="hint">全' + buildWordPool().length + '語からランダム出題。まずは「出題」から始めよう。</p>';
+    html += '  <p class="hint">全' + buildWordPool().length + '語から未出題・苦手な単語を優先して出題。まずは「出題」から始めよう。</p>';
     html += '  <div class="mode-grid">';
-    html += modeCardHtml("normal-quiz", "📝", "出題モード", "全問からランダムに出題");
+    html += modeCardHtml("normal-quiz", "📝", "出題モード", "未出題・苦手を優先して出題");
     html += modeCardHtml("review-quiz", "🔁", "復習モード", "誤答率が高い順に出題");
     html += modeCardHtml("stats", "📊", "統計", "単語ごとの成績を確認");
     html += modeCardHtml("create", "✏️", "作成モード", "問題を追加・編集");
@@ -902,7 +935,7 @@
       }
       candidates = candidates.slice(0, count);
     } else {
-      candidates = shuffle(pool).slice(0, count);
+      candidates = weightedSample(pool, stats, count);
     }
 
     state.quizMode = mode;
